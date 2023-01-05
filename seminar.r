@@ -135,9 +135,7 @@ fMeasure <- function(x,y){
   (2 * x * y) / (x + y) 
 }
 
-#
 # ROC curve
-#
 
 library(pROC)
 library(ggplot2)
@@ -157,189 +155,60 @@ library(CORElearn)
 
 folds <- 5
 
-# kNN, k = 1
+# kNN
 {
-evalCore<-list()
-acckNN1 <- c()
-fMeaskNN1 <- c()
-preckNN1 <- c()
-reckNN1 <- c()
-auckNN1 <- c()
-## we will make 10 calculations
-for (i in 1:10){
-  print(i)
-  foldIdx <- cvGen(nrow(train), k=folds)
-  
-  ## for each calculation, we perform a cross validation on the train (learn) set.
-  for (j in 1:folds) {
-        
-    ## select data from train and test (within the train data set!!)
-    dTrain <- train[foldIdx!=j,]
-    dTest  <- train[foldIdx==j,]
+for (k in 1:20){ ## pregledamo za vse k med 1 in 20
+  acckNN <- c()
+  fMeaskNN <- c()
+  preckNN <- c()
+  reckNN <- c()
+  auckNN <- c()
+  evalCore<-list()
+  print(k)
+  ## we will make 10 calculations
+  for (i in 1:10){
+    foldIdx <- cvGen(nrow(train), k=folds)
     
-    ## train the model 
-    modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 1) 
+    ## for each calculation, we perform a cross validation on the train set.
+    for (j in 1:folds) {
+          
+      ## select data for train and test (within the train data set!!)
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      ## train the model 
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = k) 
+      
+      ## predict on the test set (within the train set)
+      predCore <- predict(modelCore, dTest)
+      
+      ## compute the metrics
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      ## cleanup
+      destroyModels(modelCore)
+    }
     
-    ## predict on the test set (within the learn set)
-    predCore <- predict(modelCore, dTest)
+    ## aggregate the results
+    results <- gatherFromList(evalCore)
     
-    ## compute the metrics
-    evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
-                               predictedClass=predCore$class, predictedProb=predCore$prob )
+    ## get mean performance across all folds
+    meanPerformanceskNN <- sapply(results, mean)
     
-    ## cleanup
-    destroyModels(modelCore)
+    acckNN <- c(acckNN, meanPerformanceskNN['accuracy'])
+    fMeaskNN <- c(fMeaskNN, meanPerformanceskNN['Fmeasure'])
+    preckNN <- c(preckNN, meanPerformanceskNN['precision'])
+    reckNN <- c(reckNN, meanPerformanceskNN['recall'])
+    auckNN <- c(auckNN, meanPerformanceskNN['AUC'])
+
   }
-  
-  ## aggregate the results
-  results <- gatherFromList(evalCore)
-  
-  ## get mean performance across all folds
-  meanPerformanceskNN1 <- sapply(results, mean)
-  
-  acckNN1 <- c(acckNN1, meanPerformanceskNN1['accuracy'])
-  fMeaskNN1 <- c(fMeaskNN1, meanPerformanceskNN1['Fmeasure'])
-  preckNN1 <- c(preckNN1, meanPerformanceskNN1['precision'])
-  reckNN1 <- c(reckNN1, meanPerformanceskNN1['recall'])
-  auckNN1 <- c(auckNN1, meanPerformanceskNN1['AUC'])
-
+  print(fMeaskNN)
+  print(preckNN)
+  print(reckNN)
+  print(auckNN)
+  print(acckNN)
 }
-print(fMeaskNN1)
-print(preckNN1)
-print(reckNN1)
-print(auckNN1)
-print(acckNN1)
-}
-
-# kNN, k = 5
-{
-evalCore<-list()
-acckNN5 <- c()
-fMeaskNN5 <- c()
-preckNN5 <- c()
-reckNN5 <- c()
-auckNN5 <- c()
-for (i in 1:10){
-  print(i)
-  foldIdx <- cvGen(nrow(train), k=folds)
-
-  for (j in 1:folds) {
-    dTrain <- train[foldIdx!=j,]
-    dTest  <- train[foldIdx==j,]
-    
-    modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 5) 
-    
-    predCore <- predict(modelCore, dTest)
-    
-    evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
-                               predictedClass=predCore$class, predictedProb=predCore$prob )
-    
-    destroyModels(modelCore)
-  }
-  
-  results <- gatherFromList(evalCore)
-  
-  meanPerformanceskNN5 <- sapply(results, mean)
-  
-  acckNN5 <- c(acckNN1, meanPerformanceskNN5['accuracy'])
-  fMeaskNN5 <- c(fMeaskNN1, meanPerformanceskNN5['Fmeasure'])
-  preckNN5 <- c(preckNN1, meanPerformanceskNN5['precision'])
-  reckNN5 <- c(reckNN1, meanPerformanceskNN5['recall'])
-  auckNN5 <- c(auckNN1, meanPerformanceskNN5['AUC'])
-}
-
-print(fMeaskNN5)
-print(preckNN5)
-print(reckNN5)
-print(auckNN5)
-print(acckNN5)
-}
-
-# kNN, k = 9
-{
-evalCore<-list()
-acckNN9 <- c()
-fMeaskNN9 <- c()
-preckNN9 <- c()
-reckNN9 <- c()
-auckNN9 <- c()
-for (i in 1:10){
-  print(i)
-  foldIdx <- cvGen(nrow(train), k=folds)
-
-  for (j in 1:folds) {
-    dTrain <- train[foldIdx!=j,]
-    dTest  <- train[foldIdx==j,]
-    
-    modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
-    
-    predCore <- predict(modelCore, dTest)
-    
-    evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
-                               predictedClass=predCore$class, predictedProb=predCore$prob )
-    
-    destroyModels(modelCore)
-  }
-  
-  results <- gatherFromList(evalCore)
-  
-  meanPerformanceskNN9 <- sapply(results, mean)
-  
-  acckNN9 <- c(acckNN1, meanPerformanceskNN9['accuracy'])
-  fMeaskNN9 <- c(fMeaskNN1, meanPerformanceskNN9['Fmeasure'])
-  preckNN9 <- c(preckNN1, meanPerformanceskNN9['precision'])
-  reckNN9 <- c(reckNN1, meanPerformanceskNN9['recall'])
-  auckNN9 <- c(auckNN1, meanPerformanceskNN9['AUC'])
-}
-print(fMeaskNN9)
-print(preckNN9)
-print(reckNN9)
-print(auckNN9)
-print(acckNN9)
-}
-
-# kNN, k = 13
-{
-evalCore<-list()
-acckNN1 <- c()
-fMeaskNN1 <- c()
-preckNN1 <- c()
-reckNN1 <- c()
-auckNN1 <- c()
-
-for (i in 1:10){
-  print(i)
-  foldIdx <- cvGen(nrow(train), k=folds)
-
-  for (j in 1:folds) {
-    dTrain <- train[foldIdx!=j,]
-    dTest  <- train[foldIdx==j,]
-    
-    modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 13) 
-    
-    predCore <- predict(modelCore, dTest)
-    
-    evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
-                               predictedClass=predCore$class, predictedProb=predCore$prob )
-    
-    destroyModels(modelCore)
-  }
-  
-  results <- gatherFromList(evalCore)
-  
-  meanPerformanceskNN13 <- sapply(results, mean)
-  
-  acckNN13 <- c(acckNN13, meanPerformanceskNN13['accuracy'])
-  fMeaskNN13 <- c(fMeaskNN13, meanPerformanceskNN13['Fmeasure'])
-  preckNN13 <- c(preckNN13, meanPerformanceskNN13['precision'])
-  reckNN13 <- c(reckNN13, meanPerformanceskNN13['recall'])
-  auckNN13 <- c(auckNN13, meanPerformanceskNN13['AUC'])
-}
-print(fMeaskNN13)
-print(preckNN13)
-print(reckNN13)
-print(auckNN13)
-print(acckNN13)
 }
 
 # Bayes
