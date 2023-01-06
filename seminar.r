@@ -66,6 +66,10 @@ plot(importance)}
 
 train <- train[-c(2, 4,	9, 17, 19, 20, 21,	24,	25,	26,	28,	29,	32,	40)]
 
+# in case you want to get rid of both
+
+train <- train[-c(2,4,5,7,9,10,11,13,15,19,20,21,22,24,25,26,27,28,29,32,34,39,40)]
+head(train)
 #
 # KNN
 #
@@ -157,16 +161,21 @@ folds <- 5
 
 # kNN
 {
-for (k in 1:20){ ## pregledamo za vse k med 1 in 20
+bestk <- 0
+bestAcc <- 0
+bestfMeas <- 0
+bestPrec <- 0
+bestRec <- 0
+bestAuc <- 0
+for (k in seq(1,20, by = 2)){ ## pregledamo za vse k med 1 in 20
   acckNN <- c()
   fMeaskNN <- c()
   preckNN <- c()
   reckNN <- c()
   auckNN <- c()
   evalCore<-list()
-  print(k)
   ## we will make 10 calculations
-  for (i in 1:10){
+  for (i in 1:8){
     foldIdx <- cvGen(nrow(train), k=folds)
     
     ## for each calculation, we perform a cross validation on the train set.
@@ -203,16 +212,28 @@ for (k in 1:20){ ## pregledamo za vse k med 1 in 20
     auckNN <- c(auckNN, meanPerformanceskNN['AUC'])
 
   }
-  print(fMeaskNN)
-  print(preckNN)
-  print(reckNN)
-  print(auckNN)
-  print(acckNN)
+
+  avg <- mean(acckNN)
+  if(avg > bestAcc){
+    bestk <- k
+    bestAcc <- avg
+    bestfMeas <- mean(fMeaskNN)
+    bestPrec <- mean(preckNN)
+    bestRec <- mean(reckNN)
+    bestAuc <- mean(auckNN)
+  }
 }
-}
+print("kNN")
+print(c("Best k:", bestk))
+print(c("Accuracy:", bestAcc))
+print(c("fMeasure:", bestfMeas))
+print(c("Precision:", bestPrec))
+print(c("Recall:", bestRec))
+print(c("AUC:", bestAuc))
+
 
 # Bayes
-{
+
 evalCore<-list()
 accBayes <- c()
 fMeasBayes <- c()
@@ -220,7 +241,6 @@ precBayes <- c()
 recBayes <- c()
 aucBayes <- c()
 for (i in 1:10){
-  print(i)
   foldIdx <- cvGen(nrow(train), k=folds)
 
   for (j in 1:folds) {
@@ -248,15 +268,16 @@ for (i in 1:10){
   aucBayes <- c(aucBayes, meanPerformancesBayes['AUC'])
 
 }
-print(fMeasBayes)
-print(precBayes)
-print(recBayes)
-print(aucBayes)
-print(accBayes)
-}
+print("BAYES:")
+print(c("Accuracy:", mean(accBayes)))
+print(c("Fmeasure:", mean(fMeasBayes)))
+print(c("Precision:", mean(precBayes)))
+print(c("Recall:", mean(recBayes)))
+print(c("AUC:", mean(aucBayes)))
+
 
 # random forest
-{
+
 evalCore<-list()
 accRndForest <- c()
 fMeasRndForest <- c()
@@ -264,7 +285,6 @@ precRndForest <- c()
 recRndForest <- c()
 aucRndForest <- c()
 for (i in 1:10){
-  print(i)
   foldIdx <- cvGen(nrow(train), k=folds)
 
   for (j in 1:folds) {
@@ -292,9 +312,10 @@ for (i in 1:10){
   aucRndForest <- c(aucRndForest, meanPerformancesRndForest['AUC'])
 
 }
-print(fMeasRndForest)
-print(precRndForest)
-print(recRndForest)
-print(aucRndForest)
-print(accRndForest)
+print("RANDOM FOREST")
+print(c("Accuracy:", mean(accRndForest)))
+print(c("Fmeasure:", mean(fMeasRndForest)))
+print(c("Precision:", mean(precRndForest)))
+print(c("Recall:", mean(recRndForest)))
+print(c("AUC:", mean(aucRndForest)))
 }
