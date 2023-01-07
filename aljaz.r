@@ -6,6 +6,7 @@ library(CORElearn)
 train <- read.table(file="train.csv", sep=",", header= TRUE)
 test <- read.table(file="test.csv", sep=",", header= TRUE)
 summary(train)
+    
 # odstanimo stolpce V2, 4, 9, 17, 19, 21, 24, 26, 28, 29, 32, 35, 40
 reduced_train <- train[, c(1, 3, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 23, 25, 27, 30, 31, 33, 34, 36, 37, 38, 39, 41, 42)]
 
@@ -38,8 +39,10 @@ title(main="KNN classifier for k in range 3:15")
 legend(3, 85, legend=c("KNN on all features", "KNN on subset of features"), col=c("blue", "red"), lty=1, cex=1.5)
 dev.off()
 
-
-
+naiveBayes <- CoreModel(Class ~ ., data= train, model="bayes")
+predicted <- predict(naiveBayes, test, type="class")
+predicted
+CA(observed, predicted)
 
 
 # sum(train$Class == 2)/ (sum(train$Class == 1) + sum(train$Class == 2))
