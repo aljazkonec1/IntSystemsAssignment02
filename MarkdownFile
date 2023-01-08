@@ -1,0 +1,998 @@
+---
+title: "Seminar 2"
+author: "Aljaz Konec, Rok Filipovic"
+date: "2023-01-08"
+output: word_document
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Raziskovanje množice podatkov
+
+Raziskujemo množico podatkov, ki deli vse primere na razred bodisi 1 - pripravljeno na biodegradacijo bodisi 2 - nepripravljeno.
+Tretjina podaktov spada v razred 2, ostali dve tretjini pa v razred 1. 
+
+```{r echo = FALSE, message = FALSE, warning=FALSE}
+library(CORElearn)
+library(randomForest)
+library(mlbench)
+library(caret)
+library(ggplot2)
+train <- read.table("train.csv", header = T, sep=",")
+test <- read.table("test.csv", header = T, sep=",")
+
+train$Id<-NULL
+test$Id<- NULL
+
+train$Class = as.factor(train$Class)
+test$Class = as.factor(test$Class)
+
+train[train=='NA'] <- NA
+train <- train[!rowSums(is.na(train)) > 0, ]
+
+```
+```{r}
+sum(train$Class == 2)/ (sum(train$Class == 1) + sum(train$Class == 2))
+```
+
+## Manjkajoči podatki
+
+Nekaj podatkov manjka. Izmed približno 850 primerov, ki so nam podani v učni množici, je okoli 40 primerov takih, ki nimajo vseh podatkov izpolnjenih.
+Obstaja več metod, kako se spoprijeti s tako situacijo. Tri izmed pogostejših so, da se določi manjkajoče vrednosti (glede na, recimo, povprečje), da se uporabi metode, ki jih ta problem ne ovira ali pa, da se enostavno odstrani vrstice, ki vsebujejo manjkajoče vrednosti. Ker je v našem primeru to približno 5% primerkov, smo se odločili, da tako rešimo ta problem. 
+
+```{r}
+train[train=='NA'] <- NA
+train <- train[!rowSums(is.na(train)) > 0, ]
+
+```
+
+## Atributi
+
+Različni atributi različno vplivajo na končni razred posameznega primerka. Kot prikazuje prvi graf spodaj, so trije najbolj vplivni atributi V36, V39 in V1.
+
+
+```{r, message = FALSE, warning=FALSE}
+
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+model <- train(Class ~ ., data=train, method="lvq", preProcess="scale", trControl=control)
+importance <- varImp(model, scale=FALSE)
+plot(importance)
+
+```
+
+Kaj pa pomembnost atributov dejansko pomeni v smislu podatkov? Preverimo nekaj slik, ki prikazujejo, kako razpršene so same vrednosti v naših podatkih. 
+Izberimo atribute, ki so eden na vrhu, drugi na dnu, tretji pa na sredini grafa, ki prikazuje pomembnost posameznega atributa:
+
+Prvo naj bo V19, ki je na samem dnu (pomembnost približno 0,5):
+
+```{r echo = FALSE, message = FALSE}
+plot(train[train$V19 < 100, c("V19")], col=train$Class)
+
+```
+
+Sledi mu srednji, V8, s pomembnostjo 0,62:
+
+```{r echo = FALSE, message = FALSE}
+plot(train[train$V8 < 100, c("V8")], col=train$Class)
+
+```
+
+Za konec pa še najpomembnejši, V36, ki ima pomembnost nekaj več kot 0,8:
+
+```{r echo = FALSE, message = FALSE}
+plot(train[train$V36 < 100, c("V36")], col=train$Class)
+
+```
+
+Z rdečo so označene vrednosti, ki pripadajo končnemmu razredu 2, s črno pa tiste, ki pripadajo razredu 1. 
+Očitno je videti, da V19 sploh ne loči med razredoma, saj so ne glede na razred v tem atributu praktično vse vrednosti enake 0, razen pri dveh primerkih, ko so 1.
+
+Na drugi sliki opazimo, da se sicer rdeče in črne pikice bolj premešane, ampak ni očitnih delov, kjer bi ena barva prevladovala pred drugo. To pa je razvidno na zadnji sliki, kjer pa, sploh v desnem delu rdečih pikic, hitro opazimo, da večina rdečih pikic zavzame vrednosti pod 4, pri čemer pa se tudi črne ne spustijo tako nizko kot precej rdečih se. Zato je s pomočjo teh slik razvidno, kaj predstavlja graf, ki prikazuje pomembnost različnih atributov.
+
+Ena izmed podmnožic atributov, s katero se bomo srečali tudi kasneje je ravno ta, kjer se odstranijo stolpci s pomembnostjo < 0,6. 
+
+Druga glavna podmnožica, ki jo bomo odstranili pa so atributi, ki so tesno povezani en z drugim.
+
+```{r, message = FALSE}
+correlationMatrix <- cor(train[,1:41])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+print(highlyCorrelated)
+
+```
+
+Tu poračunamo correlationMatrix, ki pove, kateri atributi so v močni korelaciji en z drugim, na koncu pa kot močno kolerirane označimo tiste, ki imajo vrednost nad 0,75.
+Sam seznam highlyCorrelated nam sicer ne pove, s katerimi stolpci so dani stolpci v močni povezavi, ampak je to moč razbrati iz same correlationMatrix. Tam vidimo, da sta zelo odvisna en od drugega ravno prve dva atributa z grafa od maloprej, torej V39 in V36. Kar pomeni, da v paru en z drugim ne pridoneseta toliko k dobri določitvi. Sta pa zato precej neodvisva V1 in V36, ki pa sta prvi in tretji atribut v grafu pomembnosti.
+Ker nista torej odvisna drug od drugega in oba zelo dobro določata končno klasifikacijo je ravno V1, V36 par, ki bi ga izbrali kot najbolj tesno povezan s končno odločitvijo.
+
+# Razvijanje modelov
+
+Modeli strojnega očenja, s katerimi se bomo podrobneje lotili našega problema so kNN, random forest in naive Bayes. kNN zaradi svoje enostavnosti, Bayes in random forest pa ker dobro delujeta tudi v več dimenzijah, slednji pa je uspešen tudi s šumnimi podatki.
+
+Za začetek bi kar takoj preverili, kako se ti različni modeli obnesejo kar na testni množici, samo toliko, da se spoznamo z njimi in vidimo, kako se obnesejo, čeprav se bomo kasneje še bolj poglobili vanje.
+
+Pred izračuni smo nekaj atributov iz realno-številskih spremenili v kategorijske, saj se je pri tem izkazalo, da to pozitivno vpliva na točnosti napovedi. Za to smo izbrali atribute V8, V30 in V31, saj se pri njih pojavljajo največji preskoki med vrednostmi.
+
+```{r, echo = FALSE}
+
+Categories31 <- cut(train[,30], breaks = c(-Inf,5,30,Inf) , labels = c("5-","5-30","30+"))
+Categories31Test <- cut(test[,30], breaks = c(-Inf,5,30,Inf) , labels = c("5-","5-30","30+"))
+Categories30 <- cut(train[,30], breaks = c(-Inf,10,20,Inf) , labels = c("10-","10-20","20+"))
+Categories30Test <- cut(test[,30], breaks = c(-Inf,10,20,Inf) , labels = c("10-","10-20","20+"))
+Categories8 <- cut(train[,8], breaks = c(-Inf,30,40,Inf) , labels = c("30-","30-40","40+"))
+Categories8Test <- cut(test[,8], breaks = c(-Inf,30,40,Inf) , labels = c("30-","30-40","40+"))
+
+train[,31] <- Categories31
+test[,31] <- Categories31Test
+train[,30] <- Categories30
+test[,30] <- Categories30Test
+train[,8] <- Categories8
+test[,8] <- Categories8Test
+
+```
+
+Izračuni so narejeni na 4 različnih (pod)množicah, za povrh pa je nekaj atributov spremenjenih iz realno-številskih v kategorijske. Prej omenjene množice so:
+
+* vsi atributi
+* atributi brez nepomembnih (pomembnost < 0,6)
+* atributi brez visoko povezanih (korelacija > 0,75)
+* atributi brez nepomembnih in brez visoko povezanih
+
+
+```{r, echo = FALSE}
+observed <- test$Class
+
+CA <- function(observed, predicted) {
+  t <- table(observed, predicted)
+  
+  sum(diag(t)) / sum(t)
+}
+
+trainWOCorelated <- train[-c(5, 7,	10,	11,	13,	15,	17,	22,	27,	29,	34,	39)]
+trainSheared <- trainWOCorelated[-c(2, 4,	9, 17, 19, 20, 21,	24,	25,	26,	28,	29,	32,	40)]
+trainWOUnimportant <- train[-c(2, 4,	9, 17, 19, 20, 21,	24,	25,	26,	28,	29,	32,	40)]
+
+
+
+train_procenti <- c()
+trainWOCorelated_procenti <- c()
+trainWOUnimportant_procenti <- c()
+trainSheared_procenti <- c()
+
+for (i in 3:16){
+    knn <- CoreModel(Class ~ ., data= train, model="knn", kInNN= i )
+    predicted <- predict(knn, test, type="class" )
+    train_procenti[i-3] <- CA(observed, predicted) 
+    destroyModels(knn)
+
+    subset_knn <- CoreModel(Class ~ ., data= trainWOCorelated, model="knn", kInNN= i )
+    predicted <- predict(subset_knn, test, type="class" )
+    trainWOCorelated_procenti[i-3] <- CA(observed, predicted)
+    destroyModels(knn)
+
+    subset_knn <- CoreModel(Class ~ ., data= trainWOUnimportant, model="knn", kInNN= i )
+    predicted <- predict(subset_knn, test, type="class" )
+    trainWOUnimportant_procenti[i-3] <- CA(observed, predicted)
+    destroyModels(knn)
+
+    subset_knn <- CoreModel(Class ~ ., data= trainSheared, model="knn", kInNN= i )
+    predicted <- predict(subset_knn, test, type="class" )
+    trainSheared_procenti[i-3] <- CA(observed, predicted)
+    destroyModels(knn)
+
+}
+
+plot(3:15,train_procenti*100, type="b",xlab="k", ylab="Classification accuracy (%)",col="#197ed6", tck=1, lwd= 2 ,ylim=c(78, 87))
+lines(3:15,trainWOCorelated_procenti*100, type="b",col="#c16ec9")
+lines(3:15,trainWOUnimportant_procenti*100, type="b",col="#ff6a89")
+lines(3:15,trainSheared_procenti*100, type="b",col="#ff9742")
+title(main="KNN classifier for k in range 3:15")
+legend(3, 87, legend=c("KNN on all features", "KNN without highly correlated features",
+        "KNN without unimportant features", "KNN without highly correlated and unimportant features" ), col=c("#197ed6", "#c16ec9", "#ff6a89", "#ff9742"), lty=1, cex=1.5)
+percentages <- c()
+
+rf <- CoreModel(Class ~ ., data = train, model = "rf")
+predicted <- predict(rf, test, type="class")
+percentages[1] <- CA(observed, predicted) 
+destroyModels(rf)
+
+rf <- CoreModel(Class ~ ., data = trainWOCorelated, model = "rf")
+predicted <- predict(rf, test, type="class")
+percentages[2] <- CA(observed, predicted) 
+destroyModels(rf)
+
+rf <- CoreModel(Class ~ ., data = trainWOUnimportant, model = "rf")
+predicted <- predict(rf, test, type="class")
+percentages[3] <- CA(observed, predicted) 
+destroyModels(rf)
+
+rf <- CoreModel(Class ~ ., data = trainSheared, model = "rf")
+predicted <- predict(rf, test, type="class")
+percentages[4] <- CA(observed, predicted) 
+destroyModels(rf)
+
+names <- c("Full Features","Without high correlation", "Only important features", "Without high correlation and unimportant features")
+val <- percentages*100
+d <- data.frame(names, val)
+d$names <- factor(d$names, levels = d$names)
+
+
+  p <- ggplot(d, aes(x=names, y=val)) + geom_bar(stat="identity",fill= c("#197ed6", "#c16ec9", "#ff6a89", "#ff9742"),  color= c("#197ed6", "#c16ec9", "#ff6a89", "#ff9742")) 
+  p <- p + coord_cartesian(ylim=c(80, 85)) + xlab("Types of feature selections") + ylab("Classification accuracy (%)") + ggtitle("Random Forrest Classification Accuracy")
+  plot(p)
+
+percentages <- c()
+naiveBayes <- CoreModel(Class ~ ., data = train, model="bayes")
+predicted <- predict(naiveBayes, test, type="class")
+percentages[1] <- CA(observed, predicted) 
+destroyModels(naiveBayes)
+
+naiveBayes <- CoreModel(Class ~ ., data = trainWOCorelated, model="bayes")
+predicted <- predict(naiveBayes, test, type="class")
+percentages[2] <- CA(observed, predicted) 
+destroyModels(naiveBayes)
+
+naiveBayes <- CoreModel(Class ~ ., data = trainWOUnimportant, model="bayes")
+predicted <- predict(naiveBayes, test, type="class")
+percentages[3] <- CA(observed, predicted) 
+destroyModels(naiveBayes)
+
+naiveBayes <- CoreModel(Class ~ ., data = trainSheared, model="bayes")
+predicted <- predict(naiveBayes, test, type="class")
+percentages[4] <- CA(observed, predicted) 
+destroyModels(naiveBayes)
+
+val <- percentages*100
+d <- data.frame(names, val)
+d$names <- factor(d$names, levels = d$names)
+
+  p <- ggplot(d, aes(x=names, y=val)) + geom_bar(stat="identity",fill= c("#197ed6", "#c16ec9", "#ff6a89", "#ff9742"),  color= c("#197ed6", "#c16ec9", "#ff6a89", "#ff9742")) 
+  p <- p  + xlab("Types of feature selections") + coord_cartesian(ylim=c(75, 82)) + ylab("Classification accuracy (%)") + ggtitle("Naive Bayes Classification Accuracy")
+  
+  plot(p)
+
+```
+
+Ti grafi so nekakšen foreshadowing tega, kar bomo odkrili tudi v nadaljevanju in lahko služijo kot hipoteza, ki jo bomo kasneje poskusili in jo bomo tudi uspešno potrdili. Ta hipoteza je, da bodo naključni gozdovi najuspešnejši izmed izbranih modelov in da je napoved najtočnejša, če delamo na podmnožici, ki je brez visoko koleriranih atributov.
+
+Pojdimo torej kar na potrditev teh hipotez
+
+# Cross-validation
+
+Začeli bomo s tem, da bomo preverili učinkovitost naših modelov na podlagi učne množice s pomočjo cross-validationa. Učne primere bomo razdelili na pet delov in vsakič enega od njih primerjali z ostalimi. Za vsak model bomo poizkus preverili desetkrat in na konču izčrpali povrpečja ter standardne odklone za različne modele. 
+
+Ker nočemo, da se zdi, kot da je kNN glavna metoda, ki bi s 15 vrednostmi za k povsem osenčila Bayesa in Random Forest, bomo meritve prikazali le za k = 3, 5, 9 in 11 saj so se čez proces računanja ti najbolj izkazali.
+
+Prva vrednost v izpisu programa predstavlja vse atribute, druga je brez visoko koleriranih, tretja brez nepomembnih, zadnja pa brez obojih.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+folds <- 5
+acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 3) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 3) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 3) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 3) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("kNN, k = 3")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+
+acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 5) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 5) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 5) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 5) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("kNN, k = 5")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+  
+  acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+acckNN1 <- c()
+fMeaskNN1 <- c()
+preckNN1 <- c()
+reckNN1 <- c()
+auckNN1 <- c()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("kNN, k = 9")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+  
+    acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+acckNN1 <- c()
+fMeaskNN1 <- c()
+preckNN1 <- c()
+reckNN1 <- c()
+auckNN1 <- c()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 11) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 9) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 11) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="knn", kInNN = 11) 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("kNN, k = 11")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+  
+      acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+acckNN1 <- c()
+fMeaskNN1 <- c()
+preckNN1 <- c()
+reckNN1 <- c()
+auckNN1 <- c()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="rf") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="rf") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="rf") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="rf") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("random forest")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+  
+        acc <- c(0,0,0,0)
+fMes <- c(0,0,0,0)
+precision <- c(0,0,0,0)
+recall <- c(0,0,0,0)
+auc <- c(0,0,0,0)
+
+evalCore<-list()
+evalCoreWOCorelated <- list()
+evalCoreWOUnimportant <- list()
+evalCoreSheared <- list()
+
+acckNN1 <- c()
+fMeaskNN1 <- c()
+preckNN1 <- c()
+reckNN1 <- c()
+auckNN1 <- c()
+
+  for (i in 1:10){
+
+    foldIdx <- cvGen(nrow(train), k=folds)
+    for (j in 1:folds) {
+      dTrain <- train[foldIdx!=j,]
+      dTest  <- train[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="bayes") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCore[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainWOCorelated[foldIdx!=j,]
+      dTest  <- trainWOCorelated[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="bayes") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOCorelated[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+
+      ##
+      dTrain <- trainWOUnimportant[foldIdx!=j,]
+      dTest  <- trainWOUnimportant[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="bayes") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreWOUnimportant[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+
+      ##
+      dTrain <- trainSheared[foldIdx!=j,]
+      dTest  <- trainSheared[foldIdx==j,]
+      
+      modelCore <- CoreModel(Class~., dTrain, model="bayes") 
+      predCore <- predict(modelCore, dTest)
+      
+      evalCoreSheared[[j]] <- modelEval(modelCore, correctClass=dTest$Class,
+                                predictedClass=predCore$class, predictedProb=predCore$prob )
+      
+      destroyModels(modelCore)
+    }
+  
+  
+  results <- gatherFromList(evalCore)
+  meanPerf <- sapply(results, mean)
+  if (meanPerf['accuracy'] > acc[1] ) {
+    acc[1] <- meanPerf['accuracy']
+    fMes[1] <- meanPerf['Fmeasure']
+    precision[1] <- meanPerf['precision']
+    recall[1]<- meanPerf['recall']
+    auc[1]<- meanPerf['AUC']
+  }
+
+
+  results <- gatherFromList(evalCoreWOUnimportant)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[2]) {
+    acc[2] <- meanPerf['accuracy']
+    fMes[2] <- meanPerf['Fmeasure']
+    precision[2] <- meanPerf['precision']
+    recall[2]<- meanPerf['recall']
+    auc[2]<- meanPerf['AUC']
+  }
+
+  results <- gatherFromList(evalCoreWOCorelated)
+  meanPerf <- sapply(results, mean)
+  if(meanPerf['accuracy'] > acc[3]) {
+    acc[3] <- meanPerf['accuracy']
+    fMes[3] <- meanPerf['Fmeasure']
+    precision[3] <- meanPerf['precision']
+    recall[3]<- meanPerf['recall']
+    auc[3]<- meanPerf['AUC']
+  }
+  
+  results <- gatherFromList(evalCoreSheared)
+  meanPerf <- sapply(results, mean)
+  if( meanPerf['accuracy'] > acc[4] ) {
+    acc[4] <- meanPerf['accuracy']
+    fMes[4] <- meanPerf['Fmeasure']
+    precision[4] <- meanPerf['precision']
+    recall[4]<- meanPerf['recall']
+    auc[4]<- meanPerf['AUC']
+  }
+
+  }
+
+  print("bayes")
+  print(c("Accuracy:", acc))
+  print(c("Fmeasure:", fMes))
+  print(c("Precision:", precision))
+  print(c("Recall:", recall))
+  print(c("AUC:", auc))
+  
+```
+Kot je razvidno iz zadnjih grafov, je tudi pri cross-validationu random forest pometel s konkurenco. V štirih od petih kategorij, ki smo jih spremljali, je očitno nad ostalimi opazovanimi modeli. Edina kategorija, v kateri zaostaja, je precision, ampak tudi tam ni očitno slabši. Poleg tega izstopa tudi naivni Bayes, ki pa izstopa v drugo, negativno stran, saj je v veliki večini kategorij na dnu.
+
+Med različnimi modeli res je nekaj odstotkov razlike, vendar to navsezadnje ni tako problematično, ker so vsi od naključnega classifierja, in tudi od večinskega, znatno ustreznejši.
+
+Prav tako pa so vsi modeli precej stabilni. Standardni odklon za vse modele, za vse vrednosti nikjer ne presega 0,006! To potrjuje idejo, da se izračuni za en model z različnimi foldi pri cross-validationu med sabo ne razlikuje tudi ob desetih ponovitvah tega poskusa. 
+Omembe vredna standardna deviacija pa se pojavi pri naivnem Bayesu in sicer pri računanju površine pod ROC linijo. Tam namreč znaša le 0,001, kar je še znatneje manj kot vse druge vrednosti ostalih modelov, ki se večinoma gibljejo med 0,004 in 0,005.
+
+# Zaključek
+
+Po začetnih poskusih izvajanja modelov na testni množici smo postavili dve hipotezi. Če se ju spet spomnimo, sta bili to, da bo naključni gozd najuspešnejša metoda in da bo najbolje izvajati napovedi na podmnožici, ki smo ji odstranili povezane atribute. V prejšnjem segmentu smo s pomočjo cross-validationa to potrdili, tako da sedaj računamo na to, da se bo ta kombinacija modela in podmnožice najuspešnejše spopadla z napovedjo "nevidene" testne množice.
+Poskusimo sedaj še dokončno uporabiti naš model na njej.
+
+```{r, echo = FALSE}
+# trainWOCorelated <- train[-c(5, 7,	10,	11,	13,	15,	17,	22,	27,	29,	34,	39)]
+testWOCorelated <- test[-c(5, 7,	10,	11,	13,	15,	17,	22,	27,	29,	34,	39)]
+
+rf <- CoreModel(Class ~ ., data = trainWOCorelated, model="rf")
+predicted <- predict(rf, testWOCorelated, type="class")
+
+Sensitivity <- function(observed, predicted, pos.class){
+  t <- table(observed, predicted)
+  
+  t[pos.class, pos.class] / sum(t[pos.class,])
+}
+
+Specificity <- function(observed, predicted, pos.class){
+  t <- table(observed, predicted)
+  
+  neg.class <- which(row.names(t) != pos.class)
+
+  t[neg.class, neg.class] / sum(t[neg.class,])
+}
+
+fMeasure <- function(sensitivity,specificity){
+  (2 * sensitivity * specificity) / (sensitivity + specificity) 
+}
+
+ca <- CA(observed,predicted)
+sens <- Sensitivity(observed, predicted, "1")
+spec <- Specificity(observed, predicted, "1")
+fmeas <- fMeasure(sens, spec)
+
+print(c("Accuracy:", ca))
+print(c("Sensitivity:", sens))
+print(c("Specificity:", spec))
+print(c("Fmeasure:", fmeas))
+
+```
